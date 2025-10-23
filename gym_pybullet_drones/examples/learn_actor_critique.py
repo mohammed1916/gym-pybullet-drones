@@ -43,11 +43,20 @@ DEFAULT_ACT = ActionType('one_d_rpm') # 'rpm' or 'pid' or 'vel' or 'one_d_rpm' o
 DEFAULT_AGENTS = 2
 DEFAULT_MA = False
 
-def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True):
+def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True, eval_only=False, model_path=None):
 
-    filename = os.path.join(output_folder, 'save-'+datetime.now().strftime("%m.%d.%Y_%H.%M.%S"))
-    if not os.path.exists(filename):
-        os.makedirs(filename+'/')
+    # If running evaluation-only and a model_path is provided, use its directory
+    if eval_only and model_path:
+        if os.path.isfile(model_path):
+            filename = os.path.dirname(model_path)
+            model_file_provided = model_path
+        else:
+            filename = model_path
+            model_file_provided = None
+    else:
+        filename = os.path.join(output_folder, 'save-'+datetime.now().strftime("%m.%d.%Y_%H.%M.%S"))
+        if not os.path.exists(filename):
+            os.makedirs(filename+'/')
 
     # For single-agent, use a custom PyTorch actor-critic trainer.
     # For multi-agent we fall back to the original SB3 PPO training (not modified here).
@@ -73,7 +82,8 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     print('[INFO] Observation space:', train_env.observation_space)
 
     #### Train the model (Actor-Critic for single-agent) #######
-    if not multiagent:
+    # Skip training if running evaluation-only
+    if not eval_only and not multiagent:
         # Build simple actor and critic networks
         obs_sample, _ = train_env.reset()
         # flatten observations
@@ -206,7 +216,7 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
             "act_dim": act_dim
         }, filename + '/final_model_actor_critic.pt')
         print("Saved actor-critic model to", filename + '/final_model_actor_critic.pt')
-    else:
+    elif not eval_only and multiagent:
         # If multiagent we used SB3 PPO above: train with that
         model = PPO('MlpPolicy',
                     train_env,
@@ -214,11 +224,21 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
         model.learn(total_timesteps=int(1e7) if local else int(1e2))
         model.save(filename+'/final_model.zip')
         print(filename)
+    else:
+        # eval_only path: skip training and continue to loading/evaluation
+        pass
 
-    #### Print training progression ############################
-    with np.load(filename+'/evaluations.npz') as data:
-        for j in range(data['timesteps'].shape[0]):
-            print(str(data['timesteps'][j])+","+str(data['results'][j][0]))
+    #### Print training progression (if available) ################
+    eval_file = filename + '/evaluations.npz'
+    if os.path.isfile(eval_file):
+        try:
+            with np.load(eval_file) as data:
+                for j in range(data['timesteps'].shape[0]):
+                    print(str(data['timesteps'][j])+","+str(data['results'][j][0]))
+        except Exception as e:
+            print(f"[WARN] could not read evaluations.npz: {e}")
+    else:
+        print(f"[INFO] No evaluations.npz found at {eval_file}, skipping evaluation progression print.")
 
     ############################################################
     ############################################################
@@ -232,7 +252,12 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     # if os.path.isfile(filename+'/final_model.zip'):
     #     path = filename+'/final_model.zip'
     # Load actor-critic model if present, otherwise try SB3 saved models
-    ac_path = filename + '/final_model_actor_critic.pt'
+    # decide which model file to try to load
+    ac_path = None
+    if model_path and os.path.isfile(model_path):
+        ac_path = model_path
+    else:
+        ac_path = filename + '/final_model_actor_critic.pt'
     if os.path.isfile(ac_path) and not multiagent:
         # load custom actor-critic
         data = torch.load(ac_path, map_location='cpu')
@@ -316,9 +341,21 @@ def run(multiagent=DEFAULT_MA, output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_
     obs, info = test_env.reset(seed=42, options={})
     start = time.time()
     for i in range((test_env.EPISODE_LEN_SEC+2)*test_env.CTRL_FREQ):
-        action, _states = model.predict(obs,
-                                        deterministic=True
-                                        )
+        # Model can be a SB3 object (has predict) or a torch.nn.Module (our custom policy)
+        if isinstance(model, torch.nn.Module):
+            # prepare obs and run forward pass
+            obs_arr = torch.tensor(np.asarray(obs).ravel(), dtype=torch.float32)
+            with torch.no_grad():
+                mean, std = model(obs_arr.unsqueeze(0))
+                action_np = mean.squeeze(0).cpu().numpy()
+            if action_np.ndim == 1:
+                action = np.expand_dims(action_np, axis=0)
+            else:
+                action = action_np
+            _states = None
+        else:
+            action, _states = model.predict(obs, deterministic=True)
+
         obs, reward, terminated, truncated, info = test_env.step(action)
         obs2 = obs.squeeze()
         act2 = action.squeeze()
@@ -364,6 +401,17 @@ if __name__ == '__main__':
     parser.add_argument('--output_folder',      default=DEFAULT_OUTPUT_FOLDER, type=str,           help='Folder where to save logs (default: "results")', metavar='')
     parser.add_argument('--colab',              default=DEFAULT_COLAB,         type=bool,          help='Whether example is being run by a notebook (default: "False")', metavar='')
     parser.add_argument('--local',              default=DEFAULT_LOCAL,         type=str2bool,      help='Run locally (long training) or short smoke test (default: True)', metavar='')
+    parser.add_argument('--eval',               default=False,                 type=str2bool,      help='Run evaluation only, skip training', metavar='')
+    parser.add_argument('--model_path',         default=None,                  type=str,           help='Path to the model file for evaluation', metavar='')
     ARGS = parser.parse_args()
 
-    run(**vars(ARGS))
+    argsd = vars(ARGS)
+    eval_only = argsd.pop('eval', False)
+    model_path = argsd.pop('model_path', None)
+    # remove local from argsd to avoid passing it twice; we'll pass explicitly
+    local_flag = argsd.pop('local', DEFAULT_LOCAL)
+    if eval_only:
+        # Run with evaluation only: force local=False for shorter runs or test mode
+        run(**argsd, local=False, eval_only=True, model_path=model_path)
+    else:
+        run(**argsd, local=local_flag)

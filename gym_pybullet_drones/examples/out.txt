@@ -1,0 +1,44 @@
+-----------------------------------------
+| eval/                   |             |
+|    mean_ep_length       | 242         |
+|    mean_reward          | 467         |
+| time/                   |             |
+|    total_timesteps      | 50000       |
+| train/                  |             |
+|    approx_kl            | 0.009699848 |
+|    clip_fraction        | 0.0567      |
+|    clip_range           | 0.2         |
+|    entropy_loss         | -1.34       |
+|    explained_variance   | -0.486      |
+|    learning_rate        | 0.0003      |
+|    loss                 | 2.88        |
+|    n_updates            | 240         |
+|    policy_gradient_loss | -0.00476    |
+|    std                  | 0.923       |
+|    value_loss           | 17.1        |
+-----------------------------------------
+New best mean reward!
+Eval num_timesteps=51000, episode_reward=467.32 +/- 0.28
+Episode length: 242.00 +/- 0.00
+---------------------------------
+| eval/              |          |
+|    mean_ep_length  | 242      |
+|    mean_reward     | 467      |
+| time/              |          |
+|    total_timesteps | 51000    |
+---------------------------------
+New best mean reward!
+Eval num_timesteps=52000, episode_reward=466.37 +/- 0.26
+Episode length: 242.00 +/- 0.00 
+
+
+
+
+
+
+
+.
+.
+.
+
+
